@@ -60,12 +60,12 @@ ds:testSet():contextSize(opt.batchSize)
 lm = nn.Sequential()
 
 local inputSize = opt.hiddenSize[1]
-for i,hiddenSize in ipairs(opt.hiddenSize) do 
+for i,hiddenSize in ipairs(opt.hiddenSize) do
 
    if i~= 1 and (not opt.lstm) and (not opt.gru) then
       lm:add(nn.Sequencer(nn.Linear(inputSize, hiddenSize)))
    end
-   
+
    -- recurrent layer
    local rnn
    if opt.gru then
@@ -91,11 +91,11 @@ for i,hiddenSize in ipairs(opt.hiddenSize) do
    end
 
    lm:add(rnn)
-   
+
    if opt.dropout then -- dropout it applied between recurrent layers
       lm:add(nn.Sequencer(nn.Dropout(opt.dropoutProb)))
    end
-   
+
    inputSize = hiddenSize
 end
 
@@ -111,8 +111,18 @@ lookup.maxOutNorm = -1 -- disable maxParamNorm on the lookup table
 lm:insert(lookup, 1)
 
 -- output layer
-lm:add(nn.Sequencer(nn.Linear(inputSize, ds:vocabularySize())))
-lm:add(nn.Sequencer(nn.LogSoftMax()))
+-- lm:add(nn.Sequencer(nn.Linear(inputSize, ds:vocabularySize())))
+-- lm:add(nn.Sequencer(nn.LogSoftMax()))
+
+local para = nn.ParallelTable()
+para:add(lm):add(nn.Identity())
+
+lm = nn.Sequential()
+lm:add(para)
+lm:add(nn.ZipTable())
+
+local tree, root = ds:frequencyTree()
+lm:add(nn.Sequencer(nn.SoftMaxTree(inputSize, tree, root, false)))
 
 if opt.uniform > 0 then
    for k,param in ipairs(lm:parameters()) do
@@ -130,7 +140,7 @@ opt.decayFactor = (opt.minLR - opt.learningRate)/opt.saturateEpoch
 
 train = dp.Optimizer{
    loss = nn.ModuleCriterion(
-            nn.SequencerCriterion(nn.ClassNLLCriterion()), 
+            nn.SequencerCriterion(nn.TreeNLLCriterion()), 
             nn.Identity(), 
             opt.cuda and nn.Sequencer(nn.Convert()) or nn.Identity()
          ),
@@ -188,6 +198,8 @@ xp = dp.Experiment{
    max_epoch = opt.maxEpoch,
    target_module = nn.SplitTable(1,1):type('torch.IntTensor')
 }
+
+xp:includeTarget()
 
 --[[GPU or CPU]]--
 
